@@ -1,109 +1,113 @@
-"""Configuración del modelo (lógica reutilizada del Módulo 1).
+"""Configuración del pipeline, reutilizando el cliente del Módulo 1.
 
-- El proveedor se elige con la variable LLM_PROVIDER (openai | anthropic).
-- Los parámetros se validan con Pydantic (temperatura 0-2, max_tokens > 0, ...).
-- La API key se guarda como SecretStr para que no aparezca en logs.
+`llm_client` (repo CaroM-LLM-Client, instalado como dependencia) aporta:
+  - ManagerSettings.from_env(): proveedor, API key (SecretStr) y ModelConfig
+    validados con Pydantic (temperatura 0-2, max_tokens > 0, timeout, reintentos).
+  - MissingAPIKeyError y la detección de parámetros que Anthropic ya no acepta.
+
+Acá sólo se agrega lo propio del pipeline: reintentos de salida, modelo de
+respaldo y el tope de max_tokens para el escalado ante respuestas truncadas.
 """
 
 from __future__ import annotations
 
-import inspect
 import logging
 import os
-from enum import StrEnum
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from llm_client import (
+    API_KEY_ENV,
+    ManagerSettings,
+    MissingAPIKeyError,
+    Provider,
+    anthropic_supports_sampling,
+)
+from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger("pipeline")
 
-
-class Provider(StrEnum):
-    OPENAI = "openai"
-    ANTHROPIC = "anthropic"
-
-
-DEFAULT_MODELS = {Provider.OPENAI: "gpt-4o-mini", Provider.ANTHROPIC: "claude-haiku-4-5"}
-_KEY_ENV = {Provider.OPENAI: "OPENAI_API_KEY", Provider.ANTHROPIC: "ANTHROPIC_API_KEY"}
-_MODEL_ENV = {Provider.OPENAI: "OPENAI_MODEL", Provider.ANTHROPIC: "ANTHROPIC_MODEL"}
+__all__ = [
+    "MissingAPIKeyError",
+    "PipelineSettings",
+    "Provider",
+    "build_chat_model",
+]
 
 
-class MissingAPIKeyError(ValueError):
-    """La API key del proveedor seleccionado no está configurada."""
-
-
-class LLMSettings(BaseModel):
+class PipelineSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider: Provider = Provider.OPENAI
-    model: str = Field(min_length=1)
-    api_key: SecretStr | None = None
-    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
-    max_tokens: int = Field(default=1024, gt=0, le=32_000)
-    timeout: float = Field(default=60.0, gt=0)
-    network_retries: int = Field(default=2, ge=0, le=10)  # reintentos del SDK (red/429/5xx)
-    output_retries: int = Field(default=3, ge=1, le=10)   # intentos de .with_retry()
+    llm: ManagerSettings
+    output_retries: int = Field(default=3, ge=1, le=10)
+    max_tokens_cap: int = Field(default=4096, gt=0, le=32_000)
+    fallback: ManagerSettings | None = None
 
     @classmethod
-    def from_env(cls, provider: str | None = None) -> "LLMSettings":
-        prov = Provider((provider or os.getenv("LLM_PROVIDER", "openai")).lower())
-        key = os.getenv(_KEY_ENV[prov])
-        data: dict = {
-            "provider": prov,
-            "model": os.getenv(_MODEL_ENV[prov]) or DEFAULT_MODELS[prov],
-            "api_key": SecretStr(key) if key else None,
-        }
+    def from_env(cls, provider: str | None = None) -> PipelineSettings:
+        llm = ManagerSettings.from_env(provider)
+        data: dict = {"llm": llm}
         for env, field in (
-            ("LLM_TEMPERATURE", "temperature"),
-            ("LLM_MAX_TOKENS", "max_tokens"),
-            ("LLM_TIMEOUT", "timeout"),
-            ("LLM_NETWORK_RETRIES", "network_retries"),
             ("LLM_OUTPUT_RETRIES", "output_retries"),
+            ("LLM_MAX_TOKENS_CAP", "max_tokens_cap"),
         ):
             if (value := os.getenv(env)) not in (None, ""):
-                data[field] = value  # Pydantic convierte y valida
+                data[field] = value
+        data["fallback"] = _fallback_from_env(llm.provider)
         return cls(**data)
 
 
-def _anthropic_accepts_temperature() -> bool:
-    """El SDK anthropic >= 2.0 (API 2026-10-21) rechaza temperature/top_p."""
-    from anthropic.resources.messages import AsyncMessages
+def _fallback_from_env(primary: Provider) -> ManagerSettings | None:
+    """LLM_FALLBACK_PROVIDER: auto (default) | none | openai | anthropic.
 
-    return "temperature" in inspect.signature(AsyncMessages.create).parameters
+    'auto' usa el otro proveedor sólo si su API key está configurada.
+    """
+    choice = (os.getenv("LLM_FALLBACK_PROVIDER") or "auto").strip().lower()
+    if choice in ("none", "no", "off", "false"):
+        return None
+    if choice == "auto":
+        other = Provider.ANTHROPIC if primary is Provider.OPENAI else Provider.OPENAI
+        if not os.getenv(API_KEY_ENV[other]):
+            return None
+        return ManagerSettings.from_env(other)
+    fallback = ManagerSettings.from_env(choice)
+    if fallback.provider is primary:
+        logger.warning("LLM_FALLBACK_PROVIDER igual al principal (%s): se ignora.", primary)
+        return None
+    return fallback
 
 
-def build_chat_model(settings: LLMSettings) -> BaseChatModel:
-    """Crea ChatOpenAI o ChatAnthropic según la configuración."""
-    if settings.api_key is None:
-        raise MissingAPIKeyError(
-            f"Falta {_KEY_ENV[settings.provider]} para '{settings.provider}'. "
-            "Configurala en el archivo .env"
-        )
+def build_chat_model(settings: ManagerSettings) -> BaseChatModel:
+    """Crea ChatOpenAI o ChatAnthropic a partir de la configuración del Módulo 1."""
+    api_key = settings.require_api_key()  # MissingAPIKeyError con mensaje claro
+    cfg = settings.model
 
     if settings.provider is Provider.OPENAI:
         from langchain_openai import ChatOpenAI
 
         return ChatOpenAI(
-            model=settings.model,
-            api_key=settings.api_key,
-            temperature=settings.temperature,
-            max_tokens=settings.max_tokens,
-            timeout=settings.timeout,
-            max_retries=settings.network_retries,
+            model=cfg.model,
+            api_key=api_key,
+            temperature=cfg.temperature,
+            max_tokens=cfg.max_tokens,  # type: ignore[call-arg]
+            timeout=cfg.timeout,
+            max_retries=cfg.max_retries,  # reintentos del SDK ante red / 429 / 5xx
         )
 
     from langchain_anthropic import ChatAnthropic
 
     kwargs: dict = {}
-    if _anthropic_accepts_temperature():
-        kwargs["temperature"] = min(settings.temperature, 1.0)  # Anthropic: rango 0-1
-    else:
-        logger.info("SDK anthropic >= 2.0: no se envía temperature (la API la rechaza).")
-    return ChatAnthropic(
-        model=settings.model,
-        api_key=settings.api_key,
-        max_tokens=settings.max_tokens,
-        timeout=settings.timeout,
-        max_retries=settings.network_retries,
+    if anthropic_supports_sampling():
+        kwargs["temperature"] = min(cfg.temperature, 1.0)  # Anthropic: rango 0-1
+    elif "temperature" in cfg.model_fields_set:
+        logger.warning(
+            "AVISO: LLM_TEMPERATURE ignorada para Anthropic "
+            "(la API 2026-10-21 ya no acepta temperature)."
+        )
+    return ChatAnthropic(  # type: ignore[call-arg]
+        model=cfg.model,
+        api_key=api_key,
+        max_tokens=cfg.max_tokens,
+        timeout=cfg.timeout,
+        max_retries=cfg.max_retries,
         **kwargs,
     )

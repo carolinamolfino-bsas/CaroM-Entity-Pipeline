@@ -1,8 +1,8 @@
-"""Prompt template modular (sin f-strings: LangChain gestiona las variables)."""
+"""Prompt templates modulares (sin f-strings: LangChain gestiona las variables)."""
 
 from __future__ import annotations
 
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 
 SYSTEM_TEMPLATE = """Sos un ingeniero de software senior especializado en análisis de \
 incidentes y arquitectura de sistemas.
@@ -29,13 +29,33 @@ HUMAN_TEMPLATE = """Texto a analizar:
 {texto}
 </texto>"""
 
+# Mensaje de autocorrección: se agrega en el reintento cuando la respuesta
+# anterior no pasó la validación, para que el modelo sepa QUÉ corregir.
+CORRECCION_TEMPLATE = PromptTemplate.from_template(
+    """Tu respuesta anterior no es válida y fue descartada.
+
+Respuesta anterior:
+{salida_previa}
+
+Problemas detectados:
+{errores}
+
+Volvé a llamar a la herramienta 'ExtraccionTecnica' corrigiendo esos problemas. \
+Seguí respetando las reglas: no inventes tecnologías que no estén en el texto."""
+)
+
 
 def build_prompt(instrucciones_formato: str = INSTRUCCIONES_FORMATO_DEFAULT) -> ChatPromptTemplate:
-    """Devuelve el template con las instrucciones de formato ya fijadas.
+    """Template del pipeline.
 
-    La única variable de entrada que queda libre es `texto`. Las instrucciones
-    de formato se pueden reemplazar sin tocar el resto del prompt.
+    - `texto` (obligatoria): el texto a analizar.
+    - `correcciones` (opcional): mensajes de autocorrección de intentos previos.
+    - `instrucciones_formato`: fijada con .partial(), reemplazable sin tocar el resto.
     """
     return ChatPromptTemplate.from_messages(
-        [("system", SYSTEM_TEMPLATE), ("human", HUMAN_TEMPLATE)]
+        [
+            ("system", SYSTEM_TEMPLATE),
+            ("human", HUMAN_TEMPLATE),
+            MessagesPlaceholder("correcciones", optional=True),
+        ]
     ).partial(instrucciones_formato=instrucciones_formato)

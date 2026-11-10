@@ -1,0 +1,28 @@
+# Configuración de herramientas (el proyecto se instala con requirements.txt).
+[project]
+name = "carom-entity-pipeline"
+version = "2.0.0"
+description = "CaroM - Pipeline LCEL de extracción de entidades técnicas validado con Pydantic"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "ASYNC"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["chain", "config", "prompts", "schemas", "evaluar"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["schemas.py", "prompts.py", "config.py", "chain.py", "evaluar.py", "main.py"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+check_untyped_defs = true

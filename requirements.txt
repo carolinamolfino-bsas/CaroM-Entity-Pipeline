@@ -1,8 +1,9 @@
-langchain-core>=1.0
-langchain-openai>=1.0
-langchain-anthropic>=1.0
-pydantic>=2.7
-python-dotenv>=1.0
+# Cliente del Módulo 1 (repo CaroM-LLM-Client), reutilizado como librería
+carom-llm-client @ git+https://github.com/carolinamolfino-bsas/CaroM-LLM-Client.git@v1.1.0
 
-# desarrollo
-pytest>=8.0
+# Rangos acotados: aceptan mejoras menores, no versiones mayores que rompan la API
+langchain-core>=1.7,<2
+langchain-openai>=1.7,<2
+langchain-anthropic>=1.7,<2
+pydantic>=2.11,<3
+python-dotenv>=1.0,<2
