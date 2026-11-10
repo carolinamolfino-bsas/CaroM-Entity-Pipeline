@@ -1,4 +1,4 @@
-# Pipeline de Extracción de Entidades Técnicas
+# CaroM - Pre-entrega 2: Pipeline de Extracción de Entidades Técnicas
 
 Pipeline en **LangChain (LCEL)** que recibe un texto sin procesar (un log de error, un incidente o una descripción de arquitectura) y devuelve un **objeto validado con Pydantic**:
 
