@@ -1,7 +1,7 @@
 # Configuración de herramientas (el proyecto se instala con requirements.txt).
 [project]
 name = "carom-entity-pipeline"
-version = "2.0.0"
+version = "2.1.0"
 description = "CaroM - Pipeline LCEL de extracción de entidades técnicas validado con Pydantic"
 requires-python = ">=3.12"
 

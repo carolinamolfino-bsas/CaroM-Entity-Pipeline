@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
+from langchain_core.language_models.base import LanguageModelInput
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_openai import ChatOpenAI
 from llm_client import (
     API_KEY_ENV,
     ManagerSettings,
@@ -76,16 +79,36 @@ def _fallback_from_env(primary: Provider) -> ManagerSettings | None:
     return fallback
 
 
+class ChatOpenAICompatible(ChatOpenAI):
+    """ChatOpenAI para servidores compatibles (Ollama, LM Studio, vLLM...).
+
+    LangChain renombra max_tokens a max_completion_tokens (exclusivo de la API
+    oficial de OpenAI). Los servidores compatibles documentan max_tokens, así
+    que acá se vuelve al nombre clásico.
+    """
+
+    def _get_request_payload(
+        self, input_: LanguageModelInput, *, stop: list[str] | None = None, **kwargs: Any
+    ) -> dict:
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        if "max_completion_tokens" in payload:
+            payload["max_tokens"] = payload.pop("max_completion_tokens")
+        return payload
+
+
 def build_chat_model(settings: ManagerSettings) -> BaseChatModel:
     """Crea ChatOpenAI o ChatAnthropic a partir de la configuración del Módulo 1."""
     api_key = settings.require_api_key()  # MissingAPIKeyError con mensaje claro
     cfg = settings.model
 
     if settings.provider is Provider.OPENAI:
-        from langchain_openai import ChatOpenAI
-
-        return ChatOpenAI(
+        # OPENAI_BASE_URL (Módulo 1) -> servidor compatible, ej. Ollama local.
+        clase = ChatOpenAICompatible if settings.base_url else ChatOpenAI
+        if settings.base_url:
+            logger.info("Usando servidor compatible con OpenAI: %s", settings.base_url)
+        return clase(
             model=cfg.model,
+            base_url=settings.base_url,
             api_key=api_key,
             temperature=cfg.temperature,
             max_tokens=cfg.max_tokens,  # type: ignore[call-arg]

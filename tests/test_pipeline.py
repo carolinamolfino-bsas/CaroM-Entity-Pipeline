@@ -307,3 +307,45 @@ def test_metricas_de_evaluacion():
     m = metricas([r, error])
     assert m["tasa_exito"] == 0.5 and m["exactitud_criticidad"] == 0.0
     assert m["recall_tecnologias"] == pytest.approx(2 / 3)
+
+
+# ---------------------------------------------------------------- OPENAI_BASE_URL (Ollama)
+
+def test_modelo_compatible_si_hay_base_url(monkeypatch):
+    from config import ChatOpenAICompatible
+
+    monkeypatch.setenv("OPENAI_API_KEY", "ollama")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://localhost:11434/v1")
+    model = build_chat_model(PipelineSettings.from_env("openai").llm)
+    assert isinstance(model, ChatOpenAICompatible)
+    payload = model._get_request_payload([("human", "hola")])
+    assert "max_tokens" in payload and "max_completion_tokens" not in payload
+
+    monkeypatch.delenv("OPENAI_BASE_URL")
+    oficial = build_chat_model(PipelineSettings.from_env("openai").llm)
+    assert not isinstance(oficial, ChatOpenAICompatible)
+
+
+def test_pipeline_end_to_end_por_http_con_autocorreccion(monkeypatch):
+    """Cadena real (ChatOpenAI + LCEL) contra un servidor local que imita a Ollama."""
+    from chain import build_chain_from_settings
+    from tests.fake_openai_server import FakeOpenAIServer
+
+    for var in ("NO_PROXY", "no_proxy"):
+        monkeypatch.setenv(var, "127.0.0.1,localhost")
+    malo = {**VALIDO, "tecnologias": []}
+    with FakeOpenAIServer([malo, VALIDO]) as server:
+        monkeypatch.setenv("OPENAI_BASE_URL", server.base_url)
+        monkeypatch.setenv("OPENAI_API_KEY", "ollama")
+        monkeypatch.setenv("OPENAI_MODEL", "qwen2.5:7b")
+        monkeypatch.setenv("LLM_FALLBACK_PROVIDER", "none")
+        settings = PipelineSettings.from_env("openai")
+        chain = build_chain_from_settings(settings, backoff=False)
+        res = run(process_text("FastAPI con Redis y PostgreSQL caído", chain=chain))
+
+    assert res.model_dump(mode="json") == VALIDO
+    primero, segundo = server.requests
+    assert primero["model"] == "qwen2.5:7b" and "max_tokens" in primero
+    assert primero["tools"][0]["function"]["name"] == "ExtraccionTecnica"
+    # el reintento lleva la autocorrección con el error concreto
+    assert "tecnologias" in segundo["messages"][-1]["content"]

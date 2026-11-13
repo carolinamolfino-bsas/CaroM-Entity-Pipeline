@@ -46,7 +46,7 @@ CaroM-Entity-Pipeline/
 ├── main.py           # Mini-script de prueba asíncrono con verificación de resultados
 ├── evaluar.py        # Mini evaluación contra un dataset con respuestas esperadas
 ├── evals/dataset.jsonl          # 10 casos: alta, media, baja y un texto ambiguo
-├── tests/test_pipeline.py       # 30 tests offline con un modelo simulado
+├── tests/                       # 32 tests offline + servidor HTTP falso compatible con OpenAI
 ├── .github/workflows/tests.yml  # CI: ruff + mypy + pytest en cada push
 ├── pyproject.toml    # Configuración de pytest, ruff y mypy
 ├── requirements.txt / requirements-dev.txt
@@ -67,7 +67,7 @@ cp .env.example .env               # Windows: copy .env.example .env
 # editar .env y completar la API key del proveedor que vas a usar
 ```
 
-`requirements.txt` instala el cliente del Módulo 1 directamente desde GitHub (`carom-llm-client @ git+https://...@v1.1.0`), así que hace falta tener `git` instalado.
+`requirements.txt` instala el cliente del Módulo 1 directamente desde GitHub (`carom-llm-client @ git+https://...@v1.2.0`), así que hace falta tener `git` instalado.
 
 ## Variables de entorno
 
@@ -77,6 +77,7 @@ cp .env.example .env               # Windows: copy .env.example .env
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | — | Obligatoria la del proveedor principal |
 | `OPENAI_MODEL` | `gpt-4o-mini` | Modelo de OpenAI |
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5` | Modelo de Anthropic |
+| `OPENAI_BASE_URL` | — | Servidor compatible con OpenAI (ej. Ollama: `http://localhost:11434/v1`). Vacío = OpenAI oficial |
 | `LLM_TEMPERATURE` | `0.7` (el `.env.example` usa `0`) | 0 a 2. Para extracción conviene que sea bajo |
 | `LLM_MAX_TOKENS` | `512` (el `.env.example` usa `1024`) | Límite inicial de salida |
 | `LLM_MAX_TOKENS_CAP` | `4096` | Tope al duplicar `max_tokens` cuando una respuesta se trunca |
@@ -116,6 +117,30 @@ INFO    pipeline: Validación OK: 3 tecnologías, criticidad=alta
 INFO    pipeline: OK en 2 intento(s), 1840 ms
 ```
 
+## Probar gratis, sin API key (Ollama)
+
+[Ollama](https://ollama.com) corre modelos de lenguaje en tu propia computadora y expone una API compatible con la de OpenAI. Con `OPENAI_BASE_URL` el pipeline usa `ChatOpenAI` contra Ollama, sin key ni costo. **Ollama y el modelo no son parte del repo:** se instalan sólo en la máquina donde querés probar.
+
+1. Instalá Ollama desde https://ollama.com/download (Windows, macOS o Linux).
+2. Descargá un modelo que soporte *tools* (`with_structured_output` las usa). Se hace una sola vez, son unos 4,7 GB y conviene tener 8 GB de RAM libres:
+   ```bash
+   ollama pull qwen2.5:7b
+   ```
+3. En tu `.env`:
+   ```
+   LLM_PROVIDER=openai
+   OPENAI_BASE_URL=http://localhost:11434/v1
+   OPENAI_API_KEY=ollama
+   OPENAI_MODEL=qwen2.5:7b
+   LLM_FALLBACK_PROVIDER=none
+   ```
+4. Corré `python main.py` y, si querés, `python evaluar.py`.
+
+Qué tener en cuenta:
+- Ollama no admite `tool_choice`, así que el modelo podría contestar con texto en vez de llamar a la herramienta. En ese caso actúa la autocorrección ("No llamaste a la herramienta…") y se reintenta.
+- Un modelo local chico es más lento y menos preciso que GPT o Claude. Sirve para ver el pipeline funcionando con respuestas reales; las métricas de `evaluar.py` van a ser más bajas.
+- Con un servidor compatible se envía `max_tokens` en lugar de `max_completion_tokens`, que es exclusivo de OpenAI (clase `ChatOpenAICompatible` en `config.py`).
+
 ## Evaluación
 
 ```bash
@@ -134,7 +159,7 @@ Devuelve código 1 si la exactitud queda debajo del umbral. Requiere una API key
 ## Tests y controles de calidad
 
 ```bash
-python -m pytest -q   # 30 tests, sin API keys
+python -m pytest -q   # 32 tests, sin API keys
 ruff check .          # estilo y errores comunes
 mypy                  # chequeo de tipos
 ```
@@ -147,7 +172,8 @@ Los tests usan un chat model simulado y cubren:
 - el respaldo con otro modelo, tanto ante un error del proveedor como al agotar los reintentos;
 - que el estado de un texto no contamine al siguiente;
 - `process_many()` con un texto que falla en el medio;
-- las métricas de evaluación.
+- las métricas de evaluación;
+- una corrida completa por HTTP contra un servidor local que imita a Ollama (`ChatOpenAI` + LCEL + autocorrección).
 
 ## Uso desde código
 
@@ -199,6 +225,6 @@ El estado entre intentos (correcciones y `max_tokens`) es propio de cada llamada
 
 ## Validación
 
-**Alcance:** los 30 tests usan un modelo simulado y no consumen créditos. Se verificó contra la API real de Anthropic con una key inválida: devuelve un 401 controlado, activa el respaldo y no reintenta.
+**Alcance:** los 32 tests usan un modelo simulado y no consumen créditos. Se verificó contra la API real de Anthropic con una key inválida: devuelve un 401 controlado, activa el respaldo y no reintenta.
 
 **Limitación:** las respuestas reales de los modelos no fueron verificadas por no disponer de créditos de API.

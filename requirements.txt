@@ -1,5 +1,5 @@
 # Cliente del Módulo 1 (repo CaroM-LLM-Client), reutilizado como librería
-carom-llm-client @ git+https://github.com/carolinamolfino-bsas/CaroM-LLM-Client.git@v1.1.0
+carom-llm-client @ git+https://github.com/carolinamolfino-bsas/CaroM-LLM-Client.git@v1.2.0
 
 # Rangos acotados: aceptan mejoras menores, no versiones mayores que rompan la API
 langchain-core>=1.7,<2
